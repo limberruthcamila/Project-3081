@@ -11,7 +11,7 @@ const firebaseConfig = {
   appId: "1:174564084979:web:d141d7ee968595f1d4bb86"
 };
 
-firebase.initializeApp(firebaseConfig);
+if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.database();
 
@@ -90,7 +90,7 @@ function loginWithGoogle() {
   showLoading();
   auth.signInWithPopup(provider)
     .then(result => {
-      if (result.additionalUserInfo.isNewUser) {
+      if (result.additionalUserInfo && result.additionalUserInfo.isNewUser) {
         return db.ref('usuarios/' + result.user.uid + '/perfil').set({
           nombre: result.user.displayName || 'Usuario',
           email: result.user.email,
@@ -99,7 +99,16 @@ function loginWithGoogle() {
         });
       }
     })
-    .catch(e => { hideLoading(); showToast(getErrorMsg(e.code), 'error'); });
+    .catch(e => {
+      hideLoading();
+      if (e.code === 'auth/popup-blocked') {
+        showToast('Navegador bloqueó la ventana emergente. Permite popups para este sitio.', 'error');
+      } else if (e.code === 'auth/popup-closed-by-user') {
+        showToast('Cerraste la ventana de Google.', 'info');
+      } else {
+        showToast(getErrorMsg(e.code), 'error');
+      }
+    });
 }
 
 function logoutUser() {
@@ -170,22 +179,42 @@ function setCurrentDate() {
 }
 
 function checkIfAdmin() {
-  db.ref('privado/' + currentUser.uid).once('value').then(snap => {
-    const datos = snap.val();
-    if (datos && datos.email === currentUser.email) {
-      // Mostrar botón de admin en el sidebar
-      const footer = document.querySelector('.sidebar-footer');
-      if (footer && !document.getElementById('adminBtn')) {
-        const btn = document.createElement('button');
-        btn.id = 'adminBtn';
-        btn.className = 'nav-item';
-        btn.style.cssText = 'color:#f59e0b;margin-bottom:6px;';
-        btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Panel Admin`;
-        btn.onclick = () => window.location.href = 'admin.html';
-        footer.insertBefore(btn, footer.firstChild);
-      }
+  // Verificar en Firestore colección privado
+  const fsConfig = {
+    apiKey: "AIzaSyBFu8Jrd2YrBTMuikiuCnOj7dyHMugHx-0",
+    authDomain: "limber-rcl-3081.firebaseapp.com",
+    projectId: "limber-rcl-3081",
+    storageBucket: "limber-rcl-3081.firebasestorage.app",
+    messagingSenderId: "258409264111",
+    appId: "1:258409264111:web:08fa48d8bb10ab83c07c1a"
+  };
+  const fsApp = firebase.apps.find(a => a.name === 'adminCheck')
+    || firebase.initializeApp(fsConfig, 'adminCheck');
+  const fs = fsApp.firestore();
+
+  fs.collection('privado').doc(currentUser.uid).get().then(doc => {
+    let isAdmin = doc.exists;
+    if (!isAdmin) {
+      return fs.collection('privado').where('email', '==', currentUser.email).get().then(q => {
+        if (!q.empty) showAdminBtn();
+      });
+    } else {
+      showAdminBtn();
     }
-  });
+  }).catch(e => console.log('Admin check:', e.message));
+}
+
+function showAdminBtn() {
+  const footer = document.querySelector('.sidebar-footer');
+  if (footer && !document.getElementById('adminBtn')) {
+    const btn = document.createElement('button');
+    btn.id = 'adminBtn';
+    btn.className = 'nav-item';
+    btn.style.cssText = 'color:#f59e0b;margin-bottom:6px;';
+    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Panel Admin`;
+    btn.onclick = () => window.location.href = 'admin.html';
+    footer.insertBefore(btn, footer.firstChild);
+  }
 }
 
 function loadUserProfile() {

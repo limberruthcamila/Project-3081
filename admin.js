@@ -14,6 +14,19 @@ if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.database();
 
+// Firestore secundario para verificar admins (colección privado)
+const firestoreConfig = {
+  apiKey: "AIzaSyBFu8Jrd2YrBTMuikiuCnOj7dyHMugHx-0",
+  authDomain: "limber-rcl-3081.firebaseapp.com",
+  projectId: "limber-rcl-3081",
+  storageBucket: "limber-rcl-3081.firebasestorage.app",
+  messagingSenderId: "258409264111",
+  appId: "1:258409264111:web:08fa48d8bb10ab83c07c1a"
+};
+const adminApp = firebase.apps.find(a => a.name === 'adminCheck') 
+  || firebase.initializeApp(firestoreConfig, 'adminCheck');
+const fsAdmin = adminApp.firestore();
+
 let currentAdmin = null;
 
 // ===== AUTH CHECK =====
@@ -24,19 +37,34 @@ auth.onAuthStateChanged(user => {
     showAdminLogin();
     return;
   }
-  db.ref('privado/' + user.uid).once('value').then(snap => {
-    const datos = snap.val();
-    if (datos && datos.email === user.email) {
+  // Verificar en Firestore colección "privado" por UID o email
+  const timeout = setTimeout(() => {
+    showAdminLogin('No se pudo conectar. Verifica tu conexión.');
+  }, 10000);
+
+  fsAdmin.collection('privado').doc(user.uid).get().then(doc => {
+    clearTimeout(timeout);
+    if (doc.exists) {
       currentAdmin = user;
       showAdminPanel();
       initAdmin();
     } else {
-      // Usuario no autorizado: mostrar login con mensaje
-      auth.signOut();
-      showAdminLogin('Tu cuenta no tiene permisos de administrador.');
+      // También verificar por email por si el doc ID es diferente
+      return fsAdmin.collection('privado').where('email', '==', user.email).get().then(query => {
+        if (!query.empty) {
+          currentAdmin = user;
+          showAdminPanel();
+          initAdmin();
+        } else {
+          auth.signOut();
+          showAdminLogin('Tu cuenta no tiene permisos de administrador.');
+        }
+      });
     }
-  }).catch(() => {
-    showAdminLogin('Error al verificar permisos. Intenta de nuevo.');
+  }).catch(err => {
+    clearTimeout(timeout);
+    console.error('Error Firestore:', err);
+    showAdminLogin('Error al verificar permisos: ' + (err.message || 'revisa las reglas de Firestore.'));
   });
 });
 
@@ -56,10 +84,17 @@ function showAdminPanel() {
 
 function adminLoginGoogle() {
   const provider = new firebase.auth.GoogleAuthProvider();
+  const errEl = document.getElementById('adminErrorMsg');
+  if (errEl) errEl.style.display = 'none';
   showLoading();
   auth.signInWithPopup(provider).catch(e => {
     hideLoading();
-    showAdminLogin('Error al iniciar sesión. Intenta de nuevo.');
+    const msg = e.code === 'auth/popup-closed-by-user'
+      ? 'Cerraste la ventana de Google. Intenta de nuevo.'
+      : e.code === 'auth/popup-blocked'
+      ? 'El navegador bloqueó la ventana emergente. Permite popups para este sitio.'
+      : 'Error al iniciar sesión: ' + (e.message || e.code);
+    showAdminLogin(msg);
   });
 }
 
@@ -486,16 +521,18 @@ function loadConfig() {
 }
 
 function loadAdminsList() {
-  db.ref('privado').once('value').then(snap => {
-    const el = document.getElementById('adminsList');
-    if (!el) return;
-    if (!snap.exists()) { el.innerHTML = '<em>No hay administradores registrados.</em>'; return; }
+  const el = document.getElementById('adminsList');
+  if (!el) return;
+  fsAdmin.collection('privado').get().then(snapshot => {
+    if (snapshot.empty) { el.innerHTML = '<em>No hay administradores registrados.</em>'; return; }
     let html = '';
-    snap.forEach(child => {
-      const d = child.val();
-      html += `<div style="margin-bottom:6px;">• <strong>${d.name||'Sin nombre'}</strong> — ${d.email||'-'} <span style="color:var(--text-muted);font-size:11px;">(uid: ${child.key})</span></div>`;
+    snapshot.forEach(doc => {
+      const d = doc.data();
+      html += `<div style="margin-bottom:6px;">• <strong>${d.name||'Sin nombre'}</strong> — ${d.email||'-'} <span style="color:var(--text-muted);font-size:11px;">(uid: ${doc.id})</span></div>`;
     });
     el.innerHTML = html;
+  }).catch(() => {
+    el.innerHTML = '<em>Error al cargar admins.</em>';
   });
 }
 
